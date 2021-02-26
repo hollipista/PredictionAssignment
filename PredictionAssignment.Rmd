@@ -1,0 +1,138 @@
+---
+title: "Prediction Asssignment"
+author: "Istvan Hollosi"
+date: '2021 02 23 '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. In this project, our goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har>.
+
+The goal of our project is to predict the manner in which they did the exercise. In this study, we will be looking for best classification method which provides most accurate prediction of this manner (variable classe). We will also use our prediction model to predict 20 different test cases.
+
+## Preparation: data download, loading, cleaning
+
+In the following session we'll load the necessary libraries, download the datasets and load them and do some exploration and cleaning. Please change the folders respectively. Also set seed in order to reproduciblity.
+
+```{r datadownload, echo=TRUE}
+library(caret);library(tidyverse);library(gbm)
+set.seed(1234)
+
+setwd("C:/R/Coursera - R Programming/PracticalMachineLearning/PredictionAssignment")
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+              "data/pml-training.csv","curl")
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+              "data/pml-testing.csv","curl")
+
+# there are NAs and empty cells as well
+FullTrain<-read.csv("data/pml-training.csv", header=T, na.strings=c("","NA")) 
+FullTest<-read.csv("data/pml-testing.csv", header=T, na.strings=c("","NA"))
+
+# we exclude variables with more than 95% missing values ratio
+FullTrain <- FullTrain %>% select_if(colMeans(is.na.data.frame(FullTrain))<0.95)
+FullTest <- FullTest %>% select_if(colMeans(is.na.data.frame(FullTest))<0.95)
+
+# also exclude ID and timestamp variables and change dependent variable to factor variable (due to it's categorical variable)
+FullTrain <- FullTrain[,-c(1:7)]
+FullTest <- FullTest[,-c(1:7)]
+FullTrain$classe<-as.factor(FullTrain$classe)
+```
+
+## Splitting data and set cross-validation
+
+We split training data set into two data set:, 70% for training (train.data) and 30% for testing (test.data). Also set training control to k-fold cross-validation with 5 subsets (due the sample size is large enough). The k-fold cross-validation method evaluates the model performance on different subset of the training data and then calculate the average prediction error rate. (read more: <http://www.sthda.com/english/articles/38-regression-model-validation/157-cross-validation-essentials-in-r/>)
+
+```{r examination, echo=TRUE}
+# Split the data into training and test set
+training.samples <- FullTrain$classe %>%
+  createDataPartition(p = 0.7, list = FALSE)
+train.data  <- FullTrain[training.samples, ]
+test.data <- FullTrain[-training.samples, ]
+
+# Define training control
+fitControl <- trainControl(method = "cv", number = 5)
+```
+
+## Model selection and evaluation
+
+We competes three model that fit for classification task evaluate them based on their accuracy. These models are Generalized Boosted Model (GBM), Random Forest (RF) and Decision Trees (DT). You can see the results below (especially confusion matrices) and a comparison of their accuracy. We'll use the best one (most accurate) for the prediction of quiz task.
+Quick recap: **accuracy** refers to the ratio of correctly classified cases while **out-of-sample error** estimated with the one minus accuracy when we predict classes on the test subset of training data. It means that the expected out-of-sample error is the expected misclassified cases ratio on the original test set.
+
+### Decision Tree (DT)
+
+Let's start with the most simple model and move towards the more complex ones.
+
+Let's imagine you are playing a game of Twenty Questions. Your opponent has secretly chosen a subject, and you must figure out what he/she chose. At each turn, you may ask a yes-or-no question, and your opponent must answer truthfully. How do you find out the secret in the fewest number of questions?
+It should be obvious some questions are better than others. For example, asking "Can it fly?" as your first question is likely to be unfruitful, whereas asking "Is it alive?" is a bit more useful. Intuitively, you want each question to significantly narrow down the space of possibly secrets, eventually leading to your answer.
+That is the basic idea behind decision trees. At each point, you consider a set of questions that can partition your data set. You choose the question that provides the best split and again find the best questions for the partitions. You stop once all the points you are considering are of the same class. Then the task of classication is easy. You can simply grab a point, and chuck it down the tree. The questions will guide it to its appropriate class. (see: <https://www.datacamp.com/community/tutorials/decision-trees-R>)
+
+```{r DT, echo=TRUE}
+# Train the model
+fitDT <- train(classe ~ ., data=train.data, 
+               method="rpart",
+               trControl=fitControl)
+
+# Summarize the results
+fitDT$finalModel
+predictDT <- predict(fitDT, newdata=test.data)
+confusionMatrix(predictDT, test.data$classe)
+```
+
+### Random Forest (RF)
+
+Random forest is a supervised learning algorithm. The "forest" it builds, is an ensemble of decision trees, usually trained with the “bagging” method. The general idea of the bagging method is that a combination of learning models increases the overall result.
+Put simply: random forest builds multiple decision trees and merges them together to get a more accurate and stable prediction.
+One big advantage of random forest is that it can be used for both classification and regression problems, which form the majority of current machine learning systems. (see: <https://builtin.com/data-science/random-forest-algorithm>)
+
+```{r RF, echo=TRUE}
+# Train the model
+fitRF <- train(classe ~ ., data=train.data, 
+               method="rf",
+               trControl=fitControl)
+
+# Summarize the results
+fitRF$finalModel
+predictRF <- predict(fitRF, newdata=test.data)
+confusionMatrix(predictRF, test.data$classe)
+```
+
+### Generalized Boosted Model (GBM)
+
+These models are a combination of two techniques: decision tree algorithms and boosting methods. Generalized Boosting Models repeatedly fit many decision trees to improve the accuracy of the model. For each new tree in the model, a random subset of all the data is selected using the boosting method. For each new tree in the model the input data are weighted in such a way that data that was poorly modelled by previous trees has a higher probability of being selected in the new tree. This means that after the first tree is fitted the model will take into account the error in the prediction of that tree to fit the next tree, and so on. By taking into account the fit of previous trees that are built, the model continuously tries to improve its accuracy. This sequential approach is unique to boosting. (see: <https://support.bccvl.org.au/support/solutions/articles/6000083212-generalized-boosting-model>)
+
+```{r GBM, echo=TRUE}
+# Train the model
+fitGBM <- train(classe ~ ., data = train.data, 
+                 method = "gbm", 
+                 trControl = fitControl,
+                 verbose = FALSE)
+
+# Summarize the results
+fitGBM$finalModel
+predictGBM <- predict(fitGBM, newdata=test.data)
+confusionMatrix(predictGBM, test.data$classe)
+
+# check importance of predictors (for potential runtime optimization)
+#importance <- varImp(fitGBM, scale=FALSE)
+#plot(importance)
+#plot(gbmFit1)
+```
+
+## Choosing the most accurate model and predict for the quiz
+
+The accuracy of the 3 classifications are the following:
+
+Decision Tree:             0.4946
+Random Fores:              **0.9913**
+Generalized Boosted Model: 0.9636
+
+Although our personal expectation was that the most accurate model is the GBM, it's turned out that the Random Forest model is more accurate. We use this one to predict the 20 data points of the quiz:
+
+```{r Prediction, echo=TRUE}
+predict(fitRF, newdata=FullTest)
+```
